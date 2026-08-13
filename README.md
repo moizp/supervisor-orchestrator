@@ -1,47 +1,35 @@
 # llm-supervisor
 
-A supervisor-orchestrator prototype that sits in front of two independently
-owned, already-fine-tuned pipelines:
+Supervisor-orchestrator prototype in front of two independently owned,
+already-fine-tuned pipelines:
 
 - **Hazard triage** (`wellington-impact-lab`) — Clarifier (ask/act) + Triage
   Classifier, for public hazard reports to Wellington City Council.
 - **OIA request routing** (OIA project) — Clarifier (ask) + department/team
   Classifier, for Official Information Act requests.
 
-Neither pipeline's code lives in this repo. This repo only orchestrates —
-it calls each pipeline's own API, the same way any external caller would.
-See `PLAN.md` for the build checklist.
+Neither pipeline's code lives here. This repo orchestrates only — subgraphs
+call each pipeline's own HTTP API. See `PLAN.md` for build steps/status.
 
 ## Getting started
-
-> Not yet runnable — this repo currently holds only planning docs. First
-> working code lands with Phase 1 in `PLAN.md`.
-
-Once Phase 1 lands, the expected local setup will be:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt   # langgraph, httpx, etc.
+pip install -r requirements.txt
 
-# Router calls a hosted, un-fine-tuned Phi-3.5-mini-instruct via GitHub Models
-# (see "Router model hosting" below) — needs a GitHub token with Models access.
-export GITHUB_MODELS_TOKEN=...
+# Base model, served locally (needs mlx_lm; production hosting is TBD — see PLAN.md Phase 5):
+mlx_lm.server --model microsoft/Phi-3.5-mini-instruct --port 8080
 
-# Where the two source pipelines are reachable (local dev or deployed).
-export HAZARD_API_BASE=http://localhost:8000
-export OIA_API_BASE=http://localhost:8100
-
-python3 orchestrate.py
+# Sanity-check the router prompt against it:
+python3 test_router_model.py
 ```
 
 ## Architecture
 
-### Role: supervisor orchestrator
-
-This service is a **supervisor**, not a fixed pipeline: a central node makes
-a routing decision after each step, rather than the sequence being entirely
-fixed in code ahead of time. Concretely:
+A **supervisor**, not a fixed pipeline: a central node decides the next
+step after each stage, rather than the sequence being entirely fixed ahead
+of time.
 
 ```
                     ┌──────────────┐
@@ -66,54 +54,27 @@ fixed in code ahead of time. Concretely:
                         END
 ```
 
-- **Router** — a single decision point upstream of both domains. Reads the
-  raw public submission text and decides `hazard` vs `oia`. Deliberately
-  **not** one of the four fine-tuned models (each is narrowly trained on its
-  own domain's instruction contract and shouldn't be asked to do an
-  unrelated classification job) — it's a zero-shot call to the plain,
-  un-fine-tuned base model instead. See "Router model hosting" below.
+- **Router** — decides `hazard` vs `oia` from raw submission text. Not one
+  of the four fine-tunes (each trained narrowly on its own domain) — a
+  zero-shot call to the plain, un-fine-tuned base model instead.
+- **`hazard_subgraph`** — `wellington-impact-lab`'s existing fixed sequence,
+  invoked as one subgraph node. No "skip clarification" branch — its
+  Clarifier always asks, by design; not revised here.
+- **`oia_supervisor`** — loops `oia_clarify` (capped at 2 attempts, plain
+  counter) until the request reads as ready, then advances to
+  `oia_classify`.
+- **Deterministic vs. model-inferred stays separate** — routing decisions
+  read parsed model output via plain code, never a second model judging a
+  first model's output.
 
-- **`hazard_subgraph`** — the existing, fixed `wellington-impact-lab`
-  pipeline (Clarifier ask → Clarifier act → deterministic aggregation →
-  Triage Classifier), invoked as a single subgraph node. No "skip
-  clarification" branch — the hazard project's Clarifier deliberately always
-  asks, by design, to keep the two-way-channel interaction predictable. This
-  orchestrator does not second-guess that design decision.
+**Router model hosting:** open. HF Inference Providers doesn't serve
+`Phi-3.5-mini-instruct` at all; Azure AI Foundry has no real free tier for
+it; GitHub Models (originally chosen) was fully retired 2026-07-30. Router
+prompt is validated locally against `mlx_lm` (see `PLAN.md` Phase 1);
+production hosting is still open (Phase 5) — leading candidate is
+self-hosting the same way as the other four models.
 
-- **`oia_supervisor`** — the part that actually needs supervisor-style
-  looping: an OIA request can be well-formed enough to classify immediately,
-  or vague enough to need one or more follow-up questions first. The
-  OIA Clarifier is called, its output is parsed, and a conditional edge
-  either loops back to clarify again (capped at 2 attempts, a plain counter,
-  no model judgement involved in the cap itself) or advances to the OIA
-  Classifier.
+**What this repo does not own:** model weights, fine-tuning code, training
+datasets (stay in each source project's repo); no frontend yet.
 
-- **Deterministic vs. model-inferred stays separate**, same discipline as
-  both source projects: routing decisions (domain choice, loop continuation)
-  are read off of parsed model output via plain code, never decided by a
-  second model re-judging a first model's output.
-
-### Router model hosting
-
-The router needs a general-purpose, un-fine-tuned instruct model — evaluated
-three hosting options before picking one (see `PLAN.md`'s completed
-investigation items for the full findings):
-
-- **Hugging Face Inference Providers** — ruled out. `Phi-3.5-mini-instruct`
-  is not currently served by any Inference Provider on HF at all (confirmed
-  directly on the model page), independent of the free tier's credit amount
-  ($0.10/month for free accounts, tiny regardless).
-- **Azure AI Foundry** — ruled out for prototype use. Phi-3.5-mini-instruct
-  is in the model catalog as a pay-as-you-go serverless endpoint, but there
-  is no standing free tier for it — only a general, time-limited new-account
-  Azure credit, not specific to this model.
-- **GitHub Models** — chosen. Hosts Phi-3.5-mini-instruct directly, free,
-  no credit card, rate-limited to roughly 50-150 requests/day depending on
-  tier — comfortably enough for a router that fires once per submission at
-  prototype scale.
-
-### What this repo does not own
-
-- No model weights, no fine-tuning code, no training datasets — those stay
-  in each source project's own repo.
-- No frontend (yet) — see `PLAN.md`'s deferred items for why.
+**License:** Business Source License 1.1 — see `LICENSE`.
