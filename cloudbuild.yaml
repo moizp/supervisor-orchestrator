@@ -1,0 +1,44 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'HF_TOKEN=${_HF_TOKEN}'
+      - '-f'
+      - 'router_service/Dockerfile'
+      - '-t'
+      - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/router-service:${_TAG}'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/router-service:${_TAG}'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'router-service'
+      - '--image'
+      - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/router-service:${_TAG}'
+      - '--region'
+      - '${_AR_REGION}'
+      - '--allow-unauthenticated'
+      # Single 2.3GB GGUF — wellington-impact-lab found 4Gi OOM-killed one
+      # model, 8Gi was needed; matching that headroom-over-file-size ratio.
+      - '--memory'
+      - '8Gi'
+      - '--cpu'
+      - '4'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '2'
+      - '--timeout'
+      - '300'
+
+images:
+  - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/router-service:${_TAG}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
