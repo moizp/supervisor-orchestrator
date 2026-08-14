@@ -9,8 +9,10 @@ owned, already-fine-tuned LLM pipelines from other projects:
 - **Hazard triage** (`wellington-impact-lab`, sibling repo) — Clarifier
   (ask/act) + Triage Classifier, for public hazard reports to Wellington
   City Council.
-- **OIA request routing** (OIA project, sibling repo) — Clarifier (ask) +
-  department/team Classifier, for Official Information Act requests.
+- **OIA request routing** (`sayyah`, branch `demo/oia-front-end`, sibling
+  repo) — Clarifier + Agency Classifier, for Official Information Act
+  requests. Live at
+  `https://oia-server-735121956125.australia-southeast1.run.app`.
 
 See `README.md` "Architecture" for the full router → subgraph design, and
 `PLAN.md` for the phased build checklist — check `PLAN.md` before starting
@@ -31,14 +33,24 @@ work, it's the source of truth for what's done vs. still open.
 - **The hazard pipeline's design is not up for revision here.** Its
   Clarifier deliberately always asks a question, no "skip if already
   clear" branch — that was an intentional choice in `wellington-impact-lab`
-  for interaction predictability. Don't add a skip/loop branch to
-  `hazard_subgraph` to make it symmetrical with `oia_supervisor` — the two
-  are different by design, not by omission.
-- **Verify hosting/pricing claims against current reality before relying on
-  them, don't trust prior research in this repo's own docs.** This project
-  already had its first "chosen" router-hosting option (GitHub Models) go
-  fully retired mid-build. Before resuming Phase 5 hosting work, re-check
-  whatever option `PLAN.md` currently points at is still real.
+  for interaction predictability. **`oia_subgraph` is deliberately NOT the
+  same shape** — it loops on a "ready" signal (checked on the first call
+  too, enabling 0/1/2 clarify rounds), which requires a retrain of the OIA
+  project's Clarifier that doesn't exist yet. Don't flatten `oia_subgraph`
+  to match hazard's always-ask-once pattern "for consistency" — that was
+  tried (2026-08-14) and was itself a mistake; see `PLAN.md` Phase 3 for
+  why the loop is the actual intended design, not hazard's shape.
+- **Verify claims against current reality before relying on them, don't
+  trust prior research in this repo's own docs — including claims about
+  the two source projects, not just external hosting.** Two real incidents
+  so far: the first "chosen" router-hosting option (GitHub Models) went
+  fully retired mid-build; and reading the real OIA project (`sayyah`)
+  correctly revealed its current API/model shape, but that finding was
+  then mis-applied to wrongly cancel a planned retrain — confusing "this
+  capability doesn't exist yet" with "this capability isn't needed." Verify
+  facts about a source project by reading it, but don't let a factual
+  finding silently overturn an already-agreed design decision without
+  re-checking the actual reasoning behind that decision first.
 
 ## Working style
 
