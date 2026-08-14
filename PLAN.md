@@ -67,36 +67,90 @@ Build checklist. See `README.md` for architecture.
 
 ## Phase 3 — OIA subgraph
 
-- [ ] Confirm OIA project's Clarifier + Classifier interfaces — **check
-      specifically for the same collapsed-endpoint/no-single-GET shape
-      found in Phase 2's audit**, don't assume clean node-per-endpoint
-      calls will work here either
-- [ ] Add OIA Clarifier training rows where the target output is
-      `Question: none — ready to classify` for well-formed requests,
-      alongside existing ask-a-question rows
-- [ ] Retrain / re-fuse / re-export (same pipeline as the hazard models)
-- [ ] Validate output round-trips through a `parse_oia_ask_output()`-style
-      parser
-- [ ] Build `oia_supervisor`: `oia_clarify` → conditional edge (parsed
-      "ready" flag, or cap of 2 attempts) → loop or advance to
-      `oia_classify`
-- [ ] Wire nodes to the OIA project's endpoints over HTTP
+- [x] **Confirmed OIA project's real interfaces (2026-08-14)** — checked
+      `/Users/moiz/Repos/sayyah`, branch `demo/oia-front-end`,
+      `docs/OIA_API.md` + the live deployment directly (not assumed):
+      - Single synchronous endpoint: `POST /v1/chat/completions`, `model`
+        field selects `"clarification"` or `"classification"`, full
+        result returned directly in the response. **No collapsed-endpoint
+        gap** — actually simpler than `wellington-impact-lab`'s API, no
+        polling needed for either call.
+      - **Already deployed and live:**
+        `https://oia-server-735121956125.australia-southeast1.run.app`
+        (Cloud Run, australia-southeast1) — verified via direct `curl`,
+        `{"status":"ok","models":["clarification","classification"]}`. An
+        undocumented (but live) `/health` endpoint exists too.
+      - No CORS headers (confirmed via `OPTIONS` check — 405, no
+        `Access-Control-Allow-Origin`) — **not a blocker**, our calls are
+        server-to-server (orchestrator backend → OIA server), not
+        browser-to-OIA-server, so CORS doesn't apply here. Flagged as a
+        concern in an earlier pass of this plan, resolved on inspection.
+- [x] **Confirmed the current (pre-retrain) baseline, not evidence against
+      retraining.** Via `oia_clarification_dataset.csv` (every row has a
+      non-empty clarification output — no "already clear" examples exist
+      *yet*) and the real frontend (`OiaFlowViewModel.svelte.ts`): today,
+      the Clarifier is called exactly once, never loops, has no "ready"
+      signal. **Correction (2026-08-14): an earlier pass of this plan
+      wrongly concluded from this that the planned retrain was
+      unnecessary** — backwards reasoning, conflating "doesn't exist yet"
+      with "not needed." The retrain's entire purpose is to add a
+      capability absent today. Confirming it's absent today is the
+      expected starting point, not a reason to cancel it. Retrain is back
+      on.
+- [x] Real output formats confirmed (different from what was originally
+      assumed, still true and still useful): **clarification** =
+      multi-line preamble + numbered list
+      (`"To process your OIA request, please clarify:\n1. ...\n2. ..."`),
+      not a single-line `Question:` template. **classification** =
+      `Agency: [name]` (single line, matches what was assumed). **The
+      retrain's "ready" output should extend this real style** (stay
+      consistent with the existing preamble/list convention the model
+      already produces correctly on hundreds of rows) rather than bolting
+      on an unrelated single-line format — lower risk to the model's
+      existing well-tuned behavior on everything else.
+- [x] **Caller-compatibility — reopened, real.** `OiaFlowViewModel.svelte.ts`'s
+      `parseClarification()` assumes the output always contains at least
+      one question. Once the retrain adds a "ready, no further questions"
+      output, this parser needs updating to handle it — genuine rework in
+      the OIA project (`sayyah`), not just a training-data change. Decide
+      whether that branch is still actively used/maintained (name suggests
+      a demo branch) before prioritizing the fix there.
+- [ ] Add training rows to `sayyah`'s `oia_clarification_dataset.csv`
+      where the target output signals readiness — **on both a first call
+      (enables 0 rounds — request already well-scoped) and after a prior
+      round of Q&A (enables 1 round)** — styled consistently with the
+      real preamble/numbered-list format above, not invented from scratch
+- [ ] Retrain / re-fuse / re-export the OIA Clarifier (in `sayyah`, its
+      own `fine_tune_oia_mlx.ipynb` pipeline)
+- [ ] Update `OiaFlowViewModel.svelte.ts`'s `parseClarification()` (or
+      decide it's out of scope if that branch is inactive) to handle the
+      new "ready" output
+- [ ] Write our own parser (in `llm-supervisor`) matching the retrained
+      format's "ready" signal + the existing multi-line question format
+- [ ] Build `oia_subgraph`: `clarify` → conditional edge (parsed "ready"
+      flag **on the first call too**, or cap of 2 attempts) → advance to
+      `classify` (0 or 1 rounds), or loop back to `clarify` with
+      accumulated context (raw_text + prior Q&A) for a 2nd round, then
+      force `classify` regardless if still not ready
+- [ ] Wire nodes to the OIA project's live endpoint over HTTP
 
 ## Phase 4 — Supervisor graph assembly
 
 - [ ] **OIA test cases here are transitively blocked on Phase 3's
-      retrain** — `oia_supervisor`'s loop logic depends on the OIA
-      Clarifier actually emitting `Question: none — ready to classify`,
-      which doesn't exist until Phase 3's dataset/retrain work lands. Not
-      just sequenced after Phase 3 — genuinely can't be tested before it.
+      retrain landing in `sayyah`** — `oia_subgraph`'s loop/skip logic
+      depends on the retrained Clarifier actually emitting a "ready"
+      signal, which doesn't exist until Phase 3's dataset+retrain work
+      lands there. (Corrected 2026-08-14 — a prior pass of this plan
+      wrongly dropped the retrain and this note along with it; both are
+      back.)
 - [ ] Parent graph: `router_node` → conditional edge →
       `{hazard_subgraph, oia_subgraph}` → `END`
-- [ ] End-to-end test: 1 hazard submission, 1 well-formed OIA (skips
-      straight to classify), 1 vague OIA (loops clarify at least once)
+- [ ] End-to-end test: 1 hazard submission, 1 OIA submission that's
+      well-scoped (0 rounds, straight to classify), 1 OIA submission
+      that's vague (loops at least once)
 - [ ] **End-to-end test, loop cap hit:** an OIA request still vague after
       2 clarify attempts — confirm it's forced to classify anyway, not
-      left hanging. Missing from the original test plan (audit finding,
-      2026-08-14) — the cap's actual purpose was never covered.
+      left hanging.
 - [ ] **Audit finding (2026-08-14, high):** `interrupt_before` +
       `MemorySaver` (as originally planned) won't survive the orchestrator
       running as a real Cloud Run service — min-instances=0, no
@@ -104,9 +158,23 @@ Build checklist. See `README.md` for architecture.
       state can vanish before the submitter's answer arrives on a
       different instance. Needs a **durable** checkpointer
       (SQLite/Postgres-backed) before this phase ships, not `MemorySaver`.
-- [ ] `interrupt_before` on every clarify-style node (`ask`, `oia_clarify`)
+- [ ] `interrupt_before` on every clarify-style node (`ask`, `clarify`)
       wired to the durable checkpointer above, keyed by session — required
       by `FRONTEND_PLAN.md`'s API contract, not optional polish
+- [ ] Add the misroute-recheck node to both subgraphs, run in parallel
+      (fan-out/fan-in) with `triage` / `classify`, writing
+      `misroute_suggestion` into graph state (see "Resolved design
+      decisions" above)
+- [ ] `POST /submit/{session_id}/switch` — restarts the other subgraph at
+      its first clarification node using the graph's existing `raw_text`
+- [ ] End-to-end test: a submission where router call 2 disagrees with
+      call 1 — confirm `misroute_suggestion` is set and the original
+      result is still returned alongside it
+- [ ] **Audit finding (2026-08-14, medium):** original API contract had no
+      safe way to recover state on refresh — `/answer`/`/switch` are real
+      mutations, unsafe to replay. Added `GET /submit/{session_id}`
+      (idempotent, no mutation) — also closes a REST-completeness gap, not
+      just the refresh problem. Implement alongside the other 3 endpoints.
 
 ## Phase 5 — Deployment
 
@@ -138,9 +206,18 @@ Build checklist. See `README.md` for architecture.
       Build source tarball. Fixed: added `.gcloudignore` (+ `.gitignore`
       entry, `models/` — model weights don't belong in this repo per its
       own README, gap now closed)
-- [ ] **Cloud Build deploy — resubmitted, in progress** (build ID
-      `c22dc677`, project `supervisor-orchestrator`). Not yet confirmed
-      working end-to-end — check status and hit `/health` once it lands.
+- [x] **Cloud Build deploy — succeeded** (build `c22dc677`). Live at
+      `https://router-service-r5t2pyegva-uc.a.run.app`
+- [x] **Gotcha found:** `--allow-unauthenticated` in `cloudbuild.yaml`
+      didn't actually apply an `allUsers` invoker binding — service
+      returned 403 until added manually:
+      `gcloud run services add-iam-policy-binding router-service --member=allUsers --role=roles/run.invoker`.
+      Not an org policy block — the binding just wasn't created. Worth
+      double-checking after any future redeploy, don't assume the flag
+      alone is sufficient.
+- [x] `test_router_model.py` re-run against the **live deployed service**
+      (not local `mlx_lm`) — same 2/2 pass, same ambiguous-case answer as
+      the local run
 - [ ] Confirm reachability to both source APIs (CORS/networking) once this
       service and Phases 2/3's subgraphs both exist
 - [ ] **Audit finding (2026-08-14, medium):** router-service is planned as
@@ -151,27 +228,44 @@ Build checklist. See `README.md` for architecture.
       router model. Reconsider colocating it in-process with the
       orchestrator's own service, same reasoning `wellington-impact-lab`
       used to justify loading both its models in one process.
-- [ ] **Known limitation to document, not fix (audit finding,
-      2026-08-14, low):** worst-case latency stacks up to 3 sequential
-      cold starts on one submission (router + orchestrator +
-      hazard/OIA backend), all min-instances=0. Document as accepted,
-      same as `wellington-impact-lab`'s own cold-start tradeoff, rather
-      than solving it.
+- [x] **Known limitation, documented (audit finding, 2026-08-14, low):**
+      worst-case latency stacks up to 3 sequential cold starts on one
+      submission (router + orchestrator + hazard/OIA backend), all
+      min-instances=0. Now recorded in `README.md`'s Architecture section
+      with the verified figure — Cloud Run's own docs confirm **15
+      minutes** idle before scale-to-zero (not a hard guarantee, "up to"),
+      recurring after every idle gap that long, not just first-ever use.
 
-## Open design decisions (audit findings, 2026-08-14, not yet resolved)
+## Resolved design decisions (2026-08-14)
 
-- [ ] **No misroute recovery path.** Router is zero-shot, unvalidated at
-      scale, and `FRONTEND_PLAN.md` makes the domain reveal non-editable
-      by the submitter. A hazard report misrouted to the OIA path gets
-      funneled into a bureaucratic question loop instead of triage —
-      actively harmful, not just a UX gap. Decide: add a correction path,
-      or explicitly document the accepted risk (same precedent as
-      `wellington-impact-lab`'s "call 111 in an emergency" disclaimer).
+- [x] **Misroute recovery — resolved.** Add a second, advisory-only router
+      call ("misroute recheck") per subgraph, run **in parallel** with the
+      final step (`triage` / `classify`) using the extra information
+      gathered by then, not sequentially before it — hides its latency
+      behind the final step's own latency. **Suggest, never auto-switch**:
+      if it disagrees with the original domain, surface *"this looks like
+      it might fit better as [other domain]"* with a switch button; the
+      already-computed result is shown regardless. Rejected the
+      auto-switch alternative — a disagreeing second zero-shot call isn't
+      necessarily *right*, and silently overriding call 1 risks replacing
+      a correct classification with a wrong one (same "never present
+      inferred output as confirmed fact" rule `wellington-impact-lab`
+      already follows). Bonus: suggestion-only needs no flip cap or cycle
+      back to the router's dispatch — no ping-pong risk, since nothing
+      auto-reroutes. Full design: `README.md` Data flow,
+      `FRONTEND_PLAN.md`.
+- [x] **Switch behavior — resolved.** Clicking "Submit as hazard report" /
+      "Submit as OIA request" always restarts at the *other* pipeline's
+      first clarification step (`ask` / `clarify`), never skips to its
+      final result — uniform regardless of how far the original path got.
+- [x] `README.md`'s stale "no frontend yet" line — fixed, now points at
+      `FRONTEND_PLAN.md`.
+
+## Open design decisions (not yet resolved)
+
 - [ ] No session TTL/cleanup for abandoned mid-clarification sessions
       (submitter starts, never answers) — will accumulate indefinitely
       under any checkpointer until something expires them.
-- [ ] `README.md`'s "no frontend yet" line is stale — `FRONTEND_PLAN.md`
-      now exists (design done, build still blocked on Phase 4).
 
 ## Deferred
 
