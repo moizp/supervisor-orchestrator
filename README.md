@@ -67,12 +67,13 @@ of time.
   read parsed model output via plain code, never a second model judging a
   first model's output.
 
-**Router model hosting:** open. HF Inference Providers doesn't serve
-`Phi-3.5-mini-instruct` at all; Azure AI Foundry has no real free tier for
-it; GitHub Models (originally chosen) was fully retired 2026-07-30. Router
-prompt is validated locally against `mlx_lm` (see `PLAN.md` Phase 1);
-production hosting is still open (Phase 5) — leading candidate is
-self-hosting the same way as the other four models.
+**Router model hosting:** self-hosted on Google Cloud Run (project
+`supervisor-orchestrator`), same pattern as the other four models —
+`Phi-3.5-mini-instruct` converted to GGUF, quantized (Q4_K_M), served via
+`llama-cpp-python` (`router_service/`). HF Inference Providers doesn't serve
+this model at all; Azure AI Foundry has no real free tier for it; GitHub
+Models (originally chosen) was fully retired 2026-07-30 — see `PLAN.md`
+Phase 0 for the full evaluation. Deploy status: see `PLAN.md` Phase 5.
 
 **What this repo does not own:** model weights, fine-tuning code, training
 datasets (stay in each source project's repo); no frontend yet.
