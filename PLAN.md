@@ -67,6 +67,20 @@ Build checklist. See `README.md` for architecture.
 
 ## Phase 3 — OIA subgraph
 
+- [x] **Confirmed the deployed backend and its deploy pipeline
+      (2026-08-14)** — the actual serving code lives on a *third* branch,
+      `demo/oia-back-end`, at `oia-server/app.py`: GGUF/`llama-cpp-python`
+      based (`oia-clarification-q4km.gguf` / `oia-classification-q4km.gguf`
+      loaded via `Llama(model_path=...)`), and **completely prompt-agnostic**
+      — it just formats whatever `messages` array the caller sends, no
+      hardcoded system prompt anywhere. Same deploy pattern as this
+      project's other 3 models: private HF repos
+      (`moiz-hf/oia-clarification-gguf`, `moiz-hf/oia-classification-gguf`)
+      as artifact storage, `oia-server/cloudbuild.yaml` fetches at Cloud
+      Build time, deploys to Cloud Run service `oia-server` in project
+      **`oia-llm-server`** (already have `gcloud` access to it). Updating
+      the clarification model is: upload new GGUF to the same HF path,
+      resubmit that cloudbuild.yaml unchanged — no `app.py` edits needed.
 - [x] **Confirmed OIA project's real interfaces (2026-08-14)** — checked
       `/Users/moiz/Repos/sayyah`, branch `demo/oia-front-end`,
       `docs/OIA_API.md` + the live deployment directly (not assumed):
@@ -115,16 +129,166 @@ Build checklist. See `README.md` for architecture.
       the OIA project (`sayyah`), not just a training-data change. Decide
       whether that branch is still actively used/maintained (name suggests
       a demo branch) before prioritizing the fix there.
-- [ ] Add training rows to `sayyah`'s `oia_clarification_dataset.csv`
-      where the target output signals readiness — **on both a first call
-      (enables 0 rounds — request already well-scoped) and after a prior
-      round of Q&A (enables 1 round)** — styled consistently with the
-      real preamble/numbered-list format above, not invented from scratch
-- [ ] Retrain / re-fuse / re-export the OIA Clarifier (in `sayyah`, its
-      own `fine_tune_oia_mlx.ipynb` pipeline)
-- [ ] Update `OiaFlowViewModel.svelte.ts`'s `parseClarification()` (or
-      decide it's out of scope if that branch is inactive) to handle the
-      new "ready" output
+- [x] **Training rows added, in `sayyah`** — 3 CSVs now feed the retrain:
+      `oia_clarification_dataset.csv` (432, unchanged), a 50-row addition
+      to `oia_clarification_long_dataset.csv` (179 → 229, grounded in real
+      fyi.org.nz topic areas/phrasing, synthesized not copied), and new
+      `oia_clarification_ready_dataset.csv` (45 rows: 16 first-call-ready,
+      14 follow-up-ready, 15 follow-up-still-asks — the three new
+      scenarios the ready signal needs). Ready sentinel, exact string used
+      everywhere: `"This request is clear enough to process — no further
+      clarification needed."`
+- [x] **Consistent-prompting decision (2026-08-15):** rather than leave
+      the old frontend sending a stale system prompt to a retrained model
+      (a real risk — the server has zero prompt logic of its own, see the
+      `oia-server/app.py` finding above), updated
+      `OiaFlowViewModel.svelte.ts`'s `SYSTEM_CLARIFICATION` to match
+      exactly, added `READY_SIGNAL` exact-match parsing + `isReady` state,
+      and updated `OiaApp.svelte`'s step2 template to show a friendly
+      "no further information needed" message instead of an empty
+      "Potentially missing information" section when ready — still the
+      same fixed two-step flow, no new step added. Autofixer + Prettier
+      clean (also fixed a pre-existing missing `{#each ... (key)}` on the
+      question list while touching that block).
+- [x] **Abandoned trying to reuse/edit `fine_tune_oia_mlx.ipynb`** — it
+      turned out to be a legacy, MLX-native-serving pipeline with no
+      working GGUF export path at all (its own "Legacy" section claims
+      `convert_hf_to_gguf.py` silently produces a base-model-identical
+      GGUF for MLX-fused Phi-3.5 weights — **empirically confirmed false
+      for the current deployment**: `curl`'d the live `oia-server` and got
+      back the exact trained preamble+numbered-list format, proving the
+      deployed GGUF is genuinely fine-tuned). Searched every branch for
+      whatever pipeline actually produced the deployed GGUFs — not found,
+      untracked in git. **Decision: stopped chasing it, followed
+      `wellington-impact-lab`'s own proven pattern directly instead**
+      (plain `mlx_lm lora` → fuse → `convert_hf_to_gguf.py` → quantize —
+      already validated 3× this project).
+- [x] `prepare_oia_clarification_data.py` written (`sayyah` root) —
+      mirrors `wellington-impact-lab`'s `generate_clarifier_dataset.py`
+      discipline: canonical `build_user_message()` (assembles the
+      follow-up round's prior-Q&A context), round-trip validation via
+      `parse_clarification_output()` before writing. All 3 CSVs merged:
+      **706 rows total, 706/706 round-trip validated, 0 failures.**
+      564 train / 142 valid.
+- [x] **Fine-tune run — done, with two real gotchas hit and fixed:**
+      - First attempt (batch-size 4, no memory flags): crashed with a
+        Metal `Insufficient Memory` OOM right as real training started
+        (validation pass alone succeeded). Root cause initially suspected
+        to be `wellington-impact-lab`'s own dev `uvicorn` server (PID
+        94502) holding a 2.4GB GGUF memory-mapped in the background —
+        confirmed via `lsof`, killed it, but the **exact same OOM
+        recurred** on retry, so it wasn't the sole cause.
+      - Real fix: our merged dataset has genuinely longer sequences than
+        `wellington-impact-lab`'s own datasets (the "long" dataset's
+        multi-sentence requests + follow-up rows appending prior Q&A),
+        pushing activation memory over the edge during backprop (vs.
+        validation, which is forward-only and survived fine). Fixed with
+        `--grad-checkpoint` + `--batch-size 2 --grad-accumulation-steps 2`
+        (same effective batch size of 4, lower peak memory per step).
+        Peak memory dropped to a stable ~9.15GB, no further crashes.
+      - **Overfitting caught and handled the same way
+        `wellington-impact-lab` documented for its own retrain:** val loss
+        bottomed at iter 300 (0.329), climbed for two checkpoints after
+        (iter 400: 0.356, iter 500: 0.366) while train loss kept dropping
+        (0.216 → 0.202 → 0.169) — genuine overfitting, not noise. **Killed
+        training at iter ~510, using the iter 300 checkpoint**
+        (`0000300_adapters.safetensors`), not the final one.
+- [x] Copy/select the iter-300 adapter checkpoint as the one to fuse
+- [x] Fuse (`mlx_lm.fuse`) → `convert_hf_to_gguf.py` → `llama-quantize`
+      (Q4_K_M, 2.29GB) — clean run, no errors
+- [x] **Local sanity test — FAILED, not deployed.** Tested 4 first-call-ready
+      requests via `llama-completion`, all straight from the training data
+      (not held-out — the easiest possible case). **All 4 asked clarifying
+      questions instead of emitting the ready signal.** Not a one-off —
+      consistent across every test. **Root cause: severe class imbalance.**
+      Only 16 first-call-ready rows out of 706 total (~2.3%) — drowned out
+      by ~650+ "always ask" rows. The model essentially never learned this
+      behavior; it learned the dominant "always ask" shortcut instead. This
+      is the exact risk `wellington-impact-lab`'s own dataset guidance
+      warns about (roughly even category coverage, or the model shortcuts
+      to the majority pattern) — we didn't hit that target: 45 ready-signal
+      rows total (first-call + follow-up combined) is ~6.4% of the dataset.
+      **Not uploaded. Not deployed.** `moiz-hf/oia-clarification-gguf` and
+      the live `oia-server` are both untouched, still the pre-retrain model.
+- [x] **Fix round 1: added 129 more ready-signal rows** (91 first-call-ready
+      + 68 follow-up-ready + 15 follow-up-ask; `oia_ready_batch2.py`,
+      genuinely varied register this time — terse, casual, formal/legalistic,
+      rambling-but-complete, news-triggered, not the earlier over-templated
+      style). Ready-signal dataset: 45 → 174 rows. Combined dataset: 706 →
+      835 rows, ready proportion 6.4% → ~19%. Regenerated JSONL
+      (835/835 round-trip validated), retrained from scratch.
+- [x] **Retrain #2 — hit the same overfitting pattern, handled the same
+      way:** val loss bottomed at iter 400 (0.309), climbed for two
+      checkpoints after (500: 0.344, 600: 0.353) while train loss stayed
+      low. Killed training, selected iter 400 (val-loss-optimal).
+- [x] **Local sanity test — FAILED AGAIN, even with the corrected balance.**
+      Same 4 first-call-ready prompts, all straight from training data —
+      all 4 still asked questions instead of the ready signal. Confirmed
+      via MD5 checksum that the correct iter-400 checkpoint was actually
+      fused (not a mixup).
+- [x] **Real root cause, found by testing later checkpoints directly (no
+      retraining needed):** aggregate val loss is dominated by the
+      majority "ask" class (~80% of rows) — the checkpoint it picks as
+      "best" doesn't necessarily mean the **minority** ready-signal
+      pattern is well-learned yet, even if the majority class is already
+      starting to overfit by that point. Tested the iter 500 and iter 600
+      checkpoints (already saved on disk, no retraining) directly via
+      `mlx_lm generate` against a temp adapter dir — **iter 600 correctly
+      produced the ready signal on all 4 previously-failing tests**, despite
+      iter 600 being *past* the aggregate-loss overfitting onset. Confirmed
+      genuine generalization, not memorization: also tested 2 typo'd
+      examples from the reserve batch (see below, never trained on) and 1
+      entirely novel example in no dataset at all (dog-attack-incidents,
+      new agency/topic) — all correct, plus the normal ask-case still
+      correctly asks. **Lesson for future retrains on skewed datasets:
+      don't pick the checkpoint by aggregate val loss alone — test the
+      minority-class behavior directly at a few checkpoints past the
+      aggregate optimum before assuming more data (rather than more
+      training) is the fix.**
+- [x] Re-fused using iter 600 (MD5-verified) → `convert_hf_to_gguf.py` →
+      `llama-quantize` (Q4_K_M, 2.29GB) → local `llama-completion` sanity
+      test on the actual final GGUF file (not just the MLX checkpoint) —
+      matches, both the ready case and the ask case correct.
+- [x] **Uploaded to `moiz-hf/oia-clarification-gguf`** (same filename,
+      overwrites the pre-retrain model). `oia-server`/Cloud Run **not yet
+      redeployed** — next step.
+- [x] **100 more ready-signal rows drafted and appended to the CSV as a
+      reserve batch** (`oia_ready_batch3.py`), deliberately with realistic
+      typos/grammar slips in the user-authored text (model output stays
+      clean) — **not yet merged into a training run** (added to the CSV
+      after this run's JSONL was already generated, so these rows are
+      genuinely held-out and were used above to confirm real
+      generalization, not just future training material). Ready dataset
+      now 274 rows total if merged (~28% of a ~935-row combined set).
+- [x] **Redeploy — hit two gotchas, both fixed:** first submit assumed
+      `wellington-impact-lab`'s own convention (`_AR_REGION=us-central1`,
+      `_AR_REPO=oia-server`) without checking — failed, that repo doesn't
+      exist in this project. `gcloud artifacts repositories list
+      --project=oia-llm-server` showed the real one:
+      **`oia-images`, region `australia-southeast1`** (matches the live
+      service's own region — this project is NZ-hosted, not US). Also:
+      `SHORT_SHA` doesn't auto-populate on a manual `gcloud builds submit`
+      (only on trigger-based builds tied to a real commit) — pass it
+      explicitly (`SHORT_SHA=$(git rev-parse --short HEAD)`) via
+      `--substitutions`.
+      **Standing rule going forward: default to `australia-southeast1`
+      for any NZ-context deployment.** `router-service` was itself
+      originally deployed to `us-central1` — not "the right call," just an
+      unchecked assumption copied from `wellington-impact-lab`'s example
+      config. **Migrated `router-service` to `australia-southeast1` too**
+      (new Artifact Registry repo, rebuild, redeploy, verified working,
+      old `us-central1` service + repo deleted) — see Phase 5.
+- [x] Resubmitted `oia-server/cloudbuild.yaml` (on `demo/oia-back-end`,
+      project `oia-llm-server`, `australia-southeast1`/`oia-images`) —
+      rebuilds with the new GGUF, redeploys the same `oia-server` Cloud
+      Run service
+- [x] **End-to-end test — passed.** Redeployed backend, real HTTP calls:
+      ready case → ready signal; ask case → 2 well-formed questions;
+      classification (unchanged model, sanity check the whole service
+      still works) → valid agency name. All via the consistent (matching)
+      system prompt now used on both the frontend and the training data.
+- [x] Update `OiaFlowViewModel.svelte.ts`'s `parseClarification()` — done
+      earlier as part of the consistent-prompting change
 - [ ] Write our own parser (in `llm-supervisor`) matching the retrained
       format's "ready" signal + the existing multi-line question format
 - [ ] Build `oia_subgraph`: `clarify` → conditional edge (parsed "ready"
@@ -218,6 +382,40 @@ Build checklist. See `README.md` for architecture.
 - [x] `test_router_model.py` re-run against the **live deployed service**
       (not local `mlx_lm`) — same 2/2 pass, same ambiguous-case answer as
       the local run
+- [x] **Migrated `us-central1` → `australia-southeast1` (2026-08-15)** —
+      the original region was an unchecked assumption copied from
+      `wellington-impact-lab`'s example config, not a deliberate choice;
+      NZ-context projects should default to `australia-southeast1` (see
+      Phase 3's finding for the OIA project hitting the same thing).
+      New Artifact Registry repo created, image rebuilt/redeployed, same
+      IAM-binding gotcha hit again (`--allow-unauthenticated` didn't
+      create the `allUsers` binding, added manually), verified working
+      (`/health` + a real classification call). Old `us-central1` Cloud
+      Run service and Artifact Registry repo **deleted** after
+      verification — live at
+      `https://router-service-716627644300.australia-southeast1.run.app`
+      now.
+- [x] **Artifact Registry audit across all 3 projects, unrelated stray
+      artifacts found and cleaned up:**
+      - A 2.2GB stale Cloud Build source tarball from the very first
+        (pre-`.gcloudignore`) attempt, sitting unbilled-for-nothing in
+        `gs://supervisor-orchestrator_cloudbuild` — deleted; added a
+        7-day lifecycle rule to both projects' `_cloudbuild` buckets so
+        this can't recur silently.
+      - 2 untagged stray `oia-server` images in `oia-llm-server` — deleted.
+      - **Found `wellington-impact-lab`'s own live production service**
+        (`wellington-poller`, both its fine-tuned models bundled in one
+        image, same pattern as `oia-server`) **deployed under the
+        `oia-llm-server` project**, not its own — real cross-project
+        entanglement, not just clutter. 3 of its 4 images weren't the
+        live one (only `:latest` is) — those 3 deleted; the live image
+        and service left untouched. Whether to properly migrate
+        `wellington-poller` to its own project is a separate, bigger
+        decision, not resolved here.
+      - Confirmed the expected total size given 5 quantized models
+        (~2.29GB each × 5 ≈ 11.45GB raw weight) packaged into 3 images
+        (2+2+1 models, ~0.3-0.5GB overhead each): ~12.3GB total across
+        both projects post-cleanup — matches observed.
 - [ ] Confirm reachability to both source APIs (CORS/networking) once this
       service and Phases 2/3's subgraphs both exist
 - [ ] **Audit finding (2026-08-14, medium):** router-service is planned as
