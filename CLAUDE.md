@@ -51,6 +51,7 @@ work, it's the source of truth for what's done vs. still open.
   facts about a source project by reading it, but don't let a factual
   finding silently overturn an already-agreed design decision without
   re-checking the actual reasoning behind that decision first.
+- Default to `australia-southeast1` or nearby sites for any NZ-context hosting e.g. for GCP or AWS deployment
 
 ## Working style
 
