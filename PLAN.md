@@ -62,17 +62,35 @@ Build checklist. See `README.md` for architecture.
       only `GET /events` with list filters. Completion can only be
       detected by **polling `GET /events` and filtering client-side by
       ID** until `status == "triaged"`.
-- [ ] Rewrite hazard subgraph around the real shape: `ask` node (calls
-      `/clarify`) → `act` node (calls `/clarification-answer`) →
-      `poll_for_triage` node (polls `GET /events`, filters by ID, loops on
-      a short interval until `status == "triaged"` or a timeout) → done.
-      Not 4 clean node-per-endpoint calls.
-- [ ] Confirm `wellington-impact-lab`'s endpoints are reachable (local,
-      then Cloud Run)
-- [ ] Decide and document the poll interval/timeout for `poll_for_triage`
-      — affects both latency and how hard this hammers
-      `wellington-impact-lab`'s `/events` endpoint
-- [ ] Compile and expose as a single node the parent graph can call
+- [x] **Rewritten around the real shape (2026-08-16), `hazard_subgraph.py`.**
+      `ask` node calls `/clarify`, then calls LangGraph's `interrupt()` with
+      the returned `clarification_question` — pauses the graph and surfaces
+      the question to the caller; resuming with `Command(resume=answer)`
+      continues inside the same node. `act` node calls
+      `/clarification-answer`. `poll_for_triage` polls `GET /events`,
+      filters client-side by ID, until `status == "triaged"`. Not 4
+      node-per-endpoint calls, matches the real API shape above.
+- [x] Confirmed reachable — verified end-to-end against the **live**
+      `wellington-poller` Cloud Run service (not local), full
+      `ask → act → poll_for_triage` run, real triage result returned
+      (`severity`, `rationale`, `hazard_type`).
+- [x] **Poll interval/timeout decided: 3s interval, 90s timeout.** 90s
+      comfortably covers the ~15s observed triage latency
+      (`test_live_interfaces.py`) with margin for cold starts; 3s keeps
+      `GET /events` call volume low (≤30 polls/submission). On timeout,
+      returns a `"complete"` result with `severity`/`hazard_type` null and
+      an explanatory `rationale` rather than hanging the submitter
+      indefinitely. Also hardened against transient `GET /events`
+      failures (seen repeatedly during testing — httpx `HTTPError`
+      swallowed and retried until the deadline, not surfaced as a hard
+      failure on one blip).
+- [x] Compiled as a single node (`hazard_subgraph.build_graph()`) — the
+      parent graph (`orchestrate.py`) adds it directly via
+      `graph.add_node("hazard", build_hazard_subgraph())`. Confirmed
+      LangGraph's dynamic `interrupt()` (not the compile-time
+      `interrupt_before` list, which can't target node names nested inside
+      a subgraph — verified empirically, see Phase 4) propagates correctly
+      across this subgraph boundary to the parent's checkpointer.
 
 ## Phase 3 — OIA subgraph
 
@@ -324,56 +342,120 @@ Build checklist. See `README.md` for architecture.
       something changed since. Retrain tracked as a fresh open item below,
       not resumed inline — this session's actual task was interface
       reachability, not accuracy.
-- [ ] Write our own parser (in `llm-supervisor`) matching the retrained
-      format's "ready" signal + the existing multi-line question format
-- [ ] Build `oia_subgraph`: `clarify` → conditional edge (parsed "ready"
-      flag **on the first call too**, or cap of 2 attempts) → advance to
-      `classify` (0 or 1 rounds), or loop back to `clarify` with
-      accumulated context (raw_text + prior Q&A) for a 2nd round, then
-      force `classify` regardless if still not ready
-- [ ] Wire nodes to the OIA project's live endpoint over HTTP
+- [x] **Parser written — `oia_parser.py`.** `parse_clarification()` mirrors
+      `OiaFlowViewModel.parseClarification()` exactly (exact-match
+      `READY_SIGNAL` sentinel, else first-line preamble + numbered
+      question list); `parse_agency()` for the `Agency: [name]`
+      classification format. Also holds the exact `SYSTEM_CLARIFICATION`/
+      `SYSTEM_CLASSIFICATION` prompt strings, verified byte-identical to
+      `sayyah`'s `OiaFlowViewModel.svelte.ts` (PLAN.md's
+      consistent-prompting decision).
+- [x] **Built — `oia_subgraph.py`.** `clarify` node calls the OIA
+      Clarifier, parses the response; if ready **or** `attempt >= 2`
+      (checked on the first call too, per README's Data flow), advances to
+      `classify` without pausing. Otherwise calls `interrupt()` with the
+      parsed questions, and on resume builds the next round's user message
+      via `build_user_message()` (mirrors `sayyah`'s
+      `prepare_oia_clarification_data.py` exactly — `"{raw_text}\n\nPrevious
+      question: {prior}\nAnswer: {answer}"` — matching the training data's
+      assembly, not an invented format) and loops back to `clarify`.
+      `classify` calls the OIA Classifier and returns the parsed agency.
+      Compiled as a single node the same way as `hazard_subgraph`.
+- [x] **Wired to the live endpoint, verified end-to-end** — real HTTP
+      calls to `oia-server`, full `clarify` (round 1) → `interrupt` →
+      resume → `clarify` (round 2, forced past the cap since the ready
+      signal never fires — see the regression finding above) → `classify`
+      → agency result. **Only the loop-cap-forced path is exercised live**
+      — 0-round (well-scoped, skips clarification) and a genuine 1-round
+      "ready on round 2" path are both blocked on the ready-signal
+      regression (open item below); the conditional-edge logic for both is
+      implemented and was validated by construction (same `route_after_clarify`
+      function decides all three cases), not separately live-tested.
 
 ## Phase 4 — Supervisor graph assembly
 
-- [ ] **OIA test cases here are transitively blocked on Phase 3's
-      retrain landing in `sayyah`** — `oia_subgraph`'s loop/skip logic
-      depends on the retrained Clarifier actually emitting a "ready"
-      signal, which doesn't exist until Phase 3's dataset+retrain work
-      lands there. (Corrected 2026-08-14 — a prior pass of this plan
-      wrongly dropped the retrain and this note along with it; both are
-      back.)
-- [ ] Parent graph: `router_node` → conditional edge →
-      `{hazard_subgraph, oia_subgraph}` → `END`
-- [ ] End-to-end test: 1 hazard submission, 1 OIA submission that's
-      well-scoped (0 rounds, straight to classify), 1 OIA submission
-      that's vague (loops at least once)
-- [ ] **End-to-end test, loop cap hit:** an OIA request still vague after
-      2 clarify attempts — confirm it's forced to classify anyway, not
-      left hanging.
-- [ ] **Audit finding (2026-08-14, high):** `interrupt_before` +
-      `MemorySaver` (as originally planned) won't survive the orchestrator
-      running as a real Cloud Run service — min-instances=0, no
-      guaranteed instance affinity across requests, so a paused graph's
-      state can vanish before the submitter's answer arrives on a
-      different instance. Needs a **durable** checkpointer
-      (SQLite/Postgres-backed) before this phase ships, not `MemorySaver`.
-- [ ] `interrupt_before` on every clarify-style node (`ask`, `clarify`)
-      wired to the durable checkpointer above, keyed by session — required
-      by `FRONTEND_PLAN.md`'s API contract, not optional polish
-- [ ] Add the misroute-recheck node to both subgraphs, run in parallel
-      (fan-out/fan-in) with `triage` / `classify`, writing
-      `misroute_suggestion` into graph state (see "Resolved design
-      decisions" above)
-- [ ] `POST /submit/{session_id}/switch` — restarts the other subgraph at
-      its first clarification node using the graph's existing `raw_text`
-- [ ] End-to-end test: a submission where router call 2 disagrees with
-      call 1 — confirm `misroute_suggestion` is set and the original
-      result is still returned alongside it
-- [ ] **Audit finding (2026-08-14, medium):** original API contract had no
-      safe way to recover state on refresh — `/answer`/`/switch` are real
-      mutations, unsafe to replay. Added `GET /submit/{session_id}`
-      (idempotent, no mutation) — also closes a REST-completeness gap, not
-      just the refresh problem. Implement alongside the other 3 endpoints.
+- [x] **OIA test cases here are still transitively blocked on Phase 3's
+      retrain** (unchanged from the 2026-08-14 note — the regression found
+      2026-08-16 means this is still true, not resolved). Everything below
+      was built and tested against the documented contract regardless;
+      the specific scenarios that need a working ready signal (0-round,
+      genuine 1-round) are noted where they're skipped, not silently
+      passed.
+- [x] **Parent graph built — `orchestrate.py`.** `router_node` →
+      `route_after_router` conditional edge → `{hazard, oia}` (both added
+      as compiled subgraphs via `add_node`) → `misroute_recheck` → `END`.
+- [x] **End-to-end test, hazard submission** — full `/submit` →
+      `/submit/{id}/answer` over real HTTP against the FastAPI app
+      (`api.py`) and the live `wellington-poller`: ask → act → poll →
+      triaged result.
+- [x] **End-to-end test, OIA loop-cap-forced** — `/submit` (round 1
+      question) → `/answer` (round 2 internally forced to `classify`
+      within the same call, since cap=2 and the ready signal never fires)
+      → agency result. This *is* the "loop cap hit" test case below,
+      demonstrated as a side effect of the live regression rather than a
+      separately staged scenario.
+- [ ] **OIA 0-round and genuine 1-round-then-ready end-to-end tests — not
+      done, blocked on the retrain** (same regression as Phase 3). The
+      conditional-edge logic (`route_after_clarify`) is identical for all
+      three cases (ready on round 1, ready on round 2, cap forced) and was
+      exercised for the cap-forced case above; the other two are
+      implemented but unverified live until the retrain lands.
+- [x] **Audit finding (2026-08-14, high) — resolved, but not the way this
+      item originally assumed.** `interrupt_before` (the compile-time node
+      list) **cannot target node names nested inside a subgraph** —
+      confirmed empirically, raises `ValueError: Interrupt node 'x' not
+      found` at compile time. Used LangGraph's dynamic `interrupt()`
+      function instead, called from inside `hazard_subgraph.ask` and
+      `oia_subgraph.clarify` — this propagates correctly across the
+      subgraph boundary to the parent's checkpointer (verified: parent
+      `app.invoke()` returns `__interrupt__` correctly, `Command(resume=...)`
+      resumes correctly). Paired with a durable **`SqliteSaver`**
+      checkpointer (not `MemorySaver`) — `orchestrate.build_app()`, DB
+      path via `CHECKPOINT_DB_PATH` env var (default
+      `orchestrator_checkpoints.sqlite`, gitignored). **Durability verified
+      directly, not assumed:** paused a graph in one Python process,
+      killed it, resumed successfully from a second, separate process
+      reading the same SQLite file — the actual failure mode this finding
+      was about (no cross-instance memory) doesn't reproduce.
+- [x] Misroute-recheck node — implemented, but **sequential, not parallel
+      with `triage`/`classify`** (deviates from the "Resolved design
+      decisions" entry's latency-hiding optimization). Running it truly in
+      parallel with just the final step would require pulling
+      `triage`/`classify` out of their subgraphs into the parent graph to
+      fan out alongside a same-superstep call, breaking subgraph
+      encapsulation for a latency optimization only. Implemented instead
+      as a step that runs after the domain subgraph completes, using the
+      real clarified/enriched text now in state (`hazard_answer` /
+      `oia_history`) — correct information, latency-hiding deferred.
+      Documented in `orchestrate.py`'s module docstring, not silently
+      dropped.
+- [x] `POST /submit/{session_id}/switch` — implemented in `api.py`. Uses
+      `graph.update_state(config, {...}, as_node="router")` to force the
+      checkpoint's next node to the other domain's subgraph entry, resets
+      that domain's own state fields to a clean first-round state, then
+      `graph.invoke(None, config)` runs forward into it. **Verified
+      end-to-end twice**: standalone (hazard mid-flow → switched to OIA,
+      new interrupt with OIA-shaped questions) and over real HTTP
+      (OIA-complete session → switched to hazard, new interrupt with a
+      hazard-shaped question).
+- [x] **End-to-end test, misroute disagreement** — submitted a
+      deliberately ambiguous request ("What has the council done about
+      the flooding on my street in the past?", the same unscored case from
+      `test_router_model.py`), answered in a way that reads as urgent/
+      ongoing. Router call 1 → `oia`; call 2 (misroute recheck, using the
+      enriched answer) → `hazard`. Result: `{"domain": "oia", "result":
+      {"agency": "Waka Kotahi"}, "misroute_suggestion": "hazard"}` — the
+      already-computed OIA result returned alongside the suggestion,
+      neither blocking nor replacing the other, matching README's Data
+      flow exactly.
+- [x] **Audit finding (2026-08-14, medium) — resolved.** `GET
+      /submit/{session_id}` implemented in `api.py`, idempotent (reads
+      `get_state()`, no mutation), returns 404 for an unknown session.
+      Verified via real HTTP alongside the other 3 endpoints
+      (`POST /submit`, `POST /submit/{id}/answer`,
+      `POST /submit/{id}/switch`) — also verified error paths: 404 on an
+      unknown session, 400 on `/answer` for a session that's already
+      `"complete"`.
 
 ## Phase 5 — Deployment
 
@@ -483,13 +565,25 @@ Build checklist. See `README.md` for architecture.
       minutes** idle before scale-to-zero (not a hard guarantee, "up to"),
       recurring after every idle gap that long, not just first-ever use.
 
+**Architecture reference moved to `README.md`** (2026-08-16) — file-by-file
+component reference, the checkpointer's exact behavior + measured growth
++ cleanup sweep design, and the `/warmup` mechanism all live there now,
+consolidated with README's existing conceptual Architecture section rather
+than duplicated across both docs.
+
 ## Resolved design decisions (2026-08-14)
 
-- [x] **Misroute recovery — resolved.** Add a second, advisory-only router
-      call ("misroute recheck") per subgraph, run **in parallel** with the
-      final step (`triage` / `classify`) using the extra information
-      gathered by then, not sequentially before it — hides its latency
-      behind the final step's own latency. **Suggest, never auto-switch**:
+- [x] **Misroute recovery — resolved as designed, implemented differently
+      (see README.md's Data flow, updated 2026-08-16).** Add a second,
+      advisory-only router call ("misroute recheck") per subgraph, using
+      the extra information gathered by then. **Originally specified to
+      run in parallel** with the final step (`triage` / `classify`) to
+      hide its latency — **built sequentially instead**: true parallelism
+      would mean pulling `triage`/`classify` out of their subgraphs into
+      the parent graph, breaking subgraph encapsulation for a latency
+      optimization only. Correctness (real clarified-text information) is
+      preserved; the latency-hiding is deferred, not the design intent
+      itself. **Suggest, never auto-switch**:
       if it disagrees with the original domain, surface *"this looks like
       it might fit better as [other domain]"* with a switch button; the
       already-computed result is shown regardless. Rejected the
@@ -510,9 +604,12 @@ Build checklist. See `README.md` for architecture.
 
 ## Open design decisions (not yet resolved)
 
-- [ ] No session TTL/cleanup for abandoned mid-clarification sessions
-      (submitter starts, never answers) — will accumulate indefinitely
-      under any checkpointer until something expires them.
+- [x] **Resolved (2026-08-16) — `checkpoint_cleanup.py`.** Covers this and
+      more: not just abandoned mid-clarification sessions but *all*
+      sessions, since nothing was ever deleted. 5-day retention, swept at
+      most once per 48h, piggybacked on every mutating request rather than
+      a separate process (see `README.md`'s Architecture section, "The
+      checkpointer", for the full design + verification).
 - [ ] **OIA Clarifier retrain needed (2026-08-16) — the deployed "ready"
       signal doesn't fire.** See the regression finding in Phase 3 above for
       the full verification (4 independent ways, all failing, on verbatim
@@ -528,6 +625,55 @@ Build checklist. See `README.md` for architecture.
 
 ## Deferred
 
-- [ ] Generic public-facing submission frontend — design done, see
-      `FRONTEND_PLAN.md`. Build still holds until Phase 4 passes (needs the
-      `interrupt_before` API contract that plan depends on).
+- [x] **Gate cleared, 2026-08-16 — frontend work can start.** Generic
+      public-facing submission frontend — design in `FRONTEND_PLAN.md`.
+      Phase 4's API contract is built and verified end-to-end (`api.py`):
+      all 4 endpoints, hazard flow, OIA loop-cap-forcing, switch, misroute
+      suggestion, refresh-safety, error paths. Two OIA scenarios (0-round,
+      genuine 1-round-then-ready) remain unverified live, blocked on the
+      Clarifier retrain (Phase 3's open item) — the frontend's clarify-loop
+      UI can still be built against the documented contract, it just won't
+      demo those two paths correctly until the retrain lands. Not a reason
+      to keep holding the whole gate.
+- [x] **`router-service` redeployed (2026-08-16) with `/warmup` + CORS.**
+      Missing CORS was caught before it could block the frontend entirely
+      — neither `router_service/main.py` nor `api.py` had any CORS
+      middleware configured at all. Added `allow_origins=["*"]` to both
+      (matches `wellington-impact-lab`'s own no-auth-anyway posture).
+      Required 2 builds: the first (`_TAG` = short SHA) went out before
+      the CORS fix was written (source tarball uploads before the build
+      starts, so an edit made mid-build isn't included); the second
+      (`_TAG` = short SHA + `-cors`) has it. Both builds succeeded (~28min
+      and ~24min respectively — normal for this 2.3GB-GGUF image, not
+      stuck). Verified live: `/health` 200, `/warmup` 200, `OPTIONS
+      /warmup` returns `access-control-allow-origin: *`, and the
+      `allUsers` invoker IAM binding survived both redeploys (it's
+      service-level, not tied to a revision). **`api.py` itself is not
+      deployed anywhere yet** — frontend work is targeting a locally-run
+      instance (`uvicorn api:app --port 8000`) for now, Cloud Run
+      deployment deferred until the UI itself works.
+- [x] **Decision (2026-08-16): `api.py`'s Cloud Run checkpoint-persistence
+      gap (see `README.md`'s "The checkpointer" section — a paused session
+      can be lost if the instance scales to zero before the submitter
+      answers, min-instances=0) is deliberately deferred, not solved.**
+      3 real fixes were scoped (pin to 1 instance, mount a GCS bucket for
+      the SQLite file, move to `langgraph-checkpoint-postgres`/Cloud SQL)
+      — none implemented. Keeping it simple for now; revisit when `api.py`
+      actually gets deployed, not before.
+- [ ] Svelte scaffold — in progress (dispatched to the Front-end Developer
+      agent, 2026-08-16). Plain Vite + Svelte 5 + TypeScript + Tailwind v4
+      (mirrors `sayyah`'s tooling, not SvelteKit — this is a single-flow
+      app, same shape as `sayyah` itself). Deploy target: **Vercel**
+      (decided 2026-08-16 — native env-var handling for the backend base
+      URLs was the deciding factor over GitHub Pages; `sayyah` already
+      uses Vercel, `wellington-impact-lab` is only *prepared* for either
+      target, no actual deploy workflow wired up there yet). See
+      `FRONTEND_PLAN.md`'s checklist: intake form → domain reveal →
+      clarify loop → result panel + switch suggestion, session_id
+      reflected in the URL. Brief given to the agent also required
+      staged status messaging instead of a bare spinner (backend calls
+      here run up to ~90s) and a backend-health indicator — see the new
+      "Communicating System State" section added to the Front-end
+      Developer agent's own guidelines
+      (`~/.claude/agents/front-end-developer.md`) for the general
+      principle, applied here.
