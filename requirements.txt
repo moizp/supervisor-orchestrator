@@ -1,2 +1,2 @@
-langgraph
-httpx
+langgraph==1.2.11
+httpx==0.28.1
