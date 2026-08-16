@@ -34,11 +34,20 @@ Build checklist. See `README.md` for architecture.
 - [x] `test_router_model.py`: 3 prompts (clear hazard, clear OIA, 1
       ambiguous/unscored) against the local server. **2/2 scored cases
       passed.**
-- [ ] `requirements.txt` (langgraph, httpx), `.env.example`
-      (`MODEL_SERVER_URL`, `HAZARD_API_BASE`, `OIA_API_BASE`)
-- [ ] Implement `router_node` in an actual graph (currently only a
-      standalone script), pointed at `MODEL_SERVER_URL` so local `mlx_lm`
-      and a future hosted endpoint are interchangeable
+- [x] `requirements.txt` (langgraph==1.2.11, httpx==0.28.1 — pinned;
+      langgraph wasn't actually installed in `.venv` despite being listed,
+      installed now), `.env.example` (`MODEL_SERVER_URL`, `HAZARD_API_BASE`,
+      `OIA_API_BASE`) — `HAZARD_API_BASE` confirmed via `gcloud run services
+      list --project=oia-llm-server`: `wellington-poller` is live at
+      `https://wellington-poller-735121956125.australia-southeast1.run.app`
+      (same project/region as `oia-server`, per Phase 5's cross-project
+      entanglement finding)
+- [x] Implemented `router_node` in `orchestrate.py`: a real `StateGraph`
+      (`router -> END`, nothing branches on the decision yet — hazard/oia
+      subgraphs don't exist). Reuses `test_router_model.py`'s prompt/parsing
+      rather than duplicating it. Verified end-to-end against the **live**
+      `router-service` (not local `mlx_lm`): correctly classified a hazard
+      test string.
 
 ## Phase 2 — Hazard subgraph (reuse existing pipeline)
 
@@ -289,6 +298,32 @@ Build checklist. See `README.md` for architecture.
       system prompt now used on both the frontend and the training data.
 - [x] Update `OiaFlowViewModel.svelte.ts`'s `parseClarification()` — done
       earlier as part of the consistent-prompting change
+- [x] **Regression found (2026-08-16), contradicts the two entries directly
+      above — verify-don't-trust applies to this repo's own docs, not just
+      external claims.** Building `llm-supervisor`'s live-interface test
+      (`test_live_interfaces.py`, all 3 deployed services) turned up that
+      `oia-server`'s Clarifier no longer reliably emits the ready signal.
+      Confirmed real, not a test artifact, four independent ways: (1) live
+      `oia-server` endpoint, (2) local GGUF
+      (`sayyah/gguf/oia-clarification-q4km.gguf`, dated 15 Aug 19:43 —
+      matches the redeploy timestamp) via `llama-cpp-python`'s auto
+      chat-template, (3) same local GGUF via the *exact* manual prompt
+      format `oia-server/app.py` actually uses in production
+      (`<|role|>\ncontent<|end|>\n...<|assistant|>\n` — ruled out a
+      chat-template mismatch as the cause), (4) greedy decoding
+      (`temperature=0`, `top_k=1` — ruled out sampling noise). All 4 ways,
+      on 3 examples taken verbatim from
+      `oia_clarification_ready_dataset.csv`'s first-call-ready rows (not
+      held-out, the easiest possible case) — every one asks a clarifying
+      question instead of emitting the ready signal. Live endpoint and
+      local GGUF file fail identically, which argues against a
+      deploy-time mismatch (stale image, wrong file) as the explanation —
+      points at the model/weights themselves. **Root cause not
+      investigated further yet** — unknown whether the two "passed" entries
+      above were tested on different (luckier) examples, tested wrong, or
+      something changed since. Retrain tracked as a fresh open item below,
+      not resumed inline — this session's actual task was interface
+      reachability, not accuracy.
 - [ ] Write our own parser (in `llm-supervisor`) matching the retrained
       format's "ready" signal + the existing multi-line question format
 - [ ] Build `oia_subgraph`: `clarify` → conditional edge (parsed "ready"
@@ -416,8 +451,22 @@ Build checklist. See `README.md` for architecture.
         (~2.29GB each × 5 ≈ 11.45GB raw weight) packaged into 3 images
         (2+2+1 models, ~0.3-0.5GB overhead each): ~12.3GB total across
         both projects post-cleanup — matches observed.
+- [x] **Raw interface reachability confirmed (2026-08-16), ahead of the
+      subgraphs existing** — `test_live_interfaces.py` added, exercises all
+      3 deployed services' actual HTTP contracts directly (not through this
+      repo's own code, which doesn't call them yet): `router-service`
+      `/health` + classify, `oia-server` `/health` + clarification +
+      classification, `wellington-poller` `/health` + full
+      `clarify → clarification-answer → poll GET /events` flow. All 3
+      services reachable and shaped as documented; the hazard poll flow
+      completed end-to-end (`severity=low`, `hazard_type=flooding`).
+      Scope was reachability only, not accuracy — see the Phase 3 finding
+      immediately above (and the fresh open item below) for the one
+      accuracy regression this run surfaced incidentally.
 - [ ] Confirm reachability to both source APIs (CORS/networking) once this
-      service and Phases 2/3's subgraphs both exist
+      service and Phases 2/3's subgraphs both exist — the item above covers
+      raw HTTP reachability; this one is still open for when this repo's
+      own code (not a standalone test script) is what's making the calls
 - [ ] **Audit finding (2026-08-14, medium):** router-service is planned as
       its own separate Cloud Run deployment, adding a network hop +
       independent cold-start surface on **every** submission (the router
@@ -464,6 +513,18 @@ Build checklist. See `README.md` for architecture.
 - [ ] No session TTL/cleanup for abandoned mid-clarification sessions
       (submitter starts, never answers) — will accumulate indefinitely
       under any checkpointer until something expires them.
+- [ ] **OIA Clarifier retrain needed (2026-08-16) — the deployed "ready"
+      signal doesn't fire.** See the regression finding in Phase 3 above for
+      the full verification (4 independent ways, all failing, on verbatim
+      training examples). Not started — root cause of *why* it regressed
+      past the previously-claimed passing tests is also unconfirmed and
+      should be figured out before just re-running the same recipe (was it
+      a fluke checkpoint choice sensitive to exact eval examples, a
+      mislabeled/overwritten GGUF, or something else?). Blocks `oia_subgraph`
+      actually looping/skipping correctly (Phase 3's last 3 unchecked
+      items) — those can still be built against the documented contract in
+      the meantime, but won't behave correctly against the live model until
+      this lands.
 
 ## Deferred
 
