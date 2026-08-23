@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .env
 models/
+*.sqlite*
+frontend/node_modules/
+frontend/dist/
