@@ -17,15 +17,15 @@
 
   const dotClass = $derived(
     status === 'online'
-      ? 'bg-emerald-500'
+      ? 'bg-success dark:bg-success-dark'
       : status === 'offline'
-        ? 'bg-red-500'
-        : 'bg-amber-400 animate-pulse'
+        ? 'bg-error dark:bg-error-dark'
+        : 'bg-warning dark:bg-warning-dark animate-pulse'
   );
 </script>
 
 <div
-  class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-xs text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300"
+  class="inline-flex items-center gap-1.5 rounded-full border border-mist bg-white/80 px-2.5 py-1 text-xs text-steel shadow-sm dark:border-mist-dark dark:bg-surface-dark-2/80 dark:text-steel-dark"
   title={label}
   role="status"
 >

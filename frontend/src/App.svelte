@@ -15,12 +15,12 @@
   });
 </script>
 
-<div class="min-h-screen bg-slate-50 px-4 py-10 dark:bg-slate-950">
+<div class="min-h-screen bg-cloud px-4 py-10 dark:bg-surface-dark">
   <div class="mx-auto flex max-w-xl flex-col gap-6">
     <header class="flex items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl font-bold text-slate-900 dark:text-slate-50">llm-supervisor</h1>
-        <p class="text-sm text-slate-500 dark:text-slate-400">
+        <h1 class="text-xl font-bold text-ink dark:text-ink-dark">llm-supervisor</h1>
+        <p class="text-sm text-steel dark:text-steel-dark">
           Hazard reports and OIA requests, sorted automatically.
         </p>
       </div>
@@ -28,7 +28,7 @@
     </header>
 
     <main
-      class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      class="rounded-xl border border-mist bg-white p-6 shadow-sm dark:border-mist-dark dark:bg-surface-dark-2"
     >
       {#if flow.step === 'resuming'}
         <StatusMessage message="Loading your submission..." />

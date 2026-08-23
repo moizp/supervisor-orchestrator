@@ -18,7 +18,7 @@
 
 {#if label}
   <p
-    class="rounded-lg bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-200"
+    class="rounded-lg bg-info/10 px-3 py-2 text-sm font-medium text-info dark:bg-info-dark/10 dark:text-info-dark"
   >
     {label}
   </p>

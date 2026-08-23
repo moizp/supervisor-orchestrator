@@ -1,5 +1,54 @@
 @import 'tailwindcss';
 
+/*
+ * NZ Government Design System (alpha) palette, sourced directly from
+ * design-system-alpha.digital.govt.nz — see PLAN.md-adjacent restyle notes.
+ * All light-mode values below are used exactly as published (pre-verified
+ * WCAG 2.1 AA); do not substitute other shades.
+ *
+ * Tokens suffixed `-dark` are NOT part of NZGDS (it doesn't define a dark
+ * theme yet) — they're this project's own judgement-call adaptations to
+ * keep the same brand hues legible on a dark background, lightened/
+ * desaturated only where the light-mode value would fail contrast.
+ */
+@theme {
+  /* Greys */
+  --color-ink: #2a2a2a; /* Slate — text, core UI, input/checkbox borders */
+  --color-graphite: #363636; /* Dark grey — graphic elements, core brand */
+  --color-steel: #595959; /* Mid grey — graphic elements */
+  --color-mist: #d3d3d3; /* Light grey — graphic elements */
+  --color-cloud: #f4f4f4; /* Off white — graphic elements */
+
+  /* Brand */
+  --color-primary: #23cba5; /* Main brand colour */
+  --color-primary-2: #24a882; /* 3:1 accessible variant, clickable elements */
+  --color-primary-3: #078766; /* 4.5:1 accessible variant, text-on-white */
+
+  /* UI */
+  --color-focus: #b53cde; /* Focus indication only */
+  --color-link: #005dbb;
+  --color-link-active: #000c48;
+  --color-link-visited: #4c2c92;
+
+  /* Alert / status */
+  --color-error: #b10e1e;
+  --color-warning: #d47500;
+  --color-success: #088a20;
+  --color-info: #1f1bfb;
+
+  /* Dark-mode adaptations (this project's own judgement call, not NZGDS) */
+  --color-surface-dark: #1e1e1e; /* page background */
+  --color-surface-dark-2: #2a2a2a; /* card / panel background */
+  --color-ink-dark: #f4f4f4; /* body text on dark surfaces */
+  --color-steel-dark: #b8b8b8; /* muted/secondary text on dark surfaces */
+  --color-mist-dark: #4a4a4a; /* borders on dark surfaces */
+  --color-link-dark: #7eb6ff; /* lightened link blue, dark bg */
+  --color-error-dark: #ff8a80; /* lightened error red, dark bg */
+  --color-warning-dark: #ffb74d; /* lightened warning orange, dark bg */
+  --color-success-dark: #4cd97b; /* lightened success green, dark bg */
+  --color-info-dark: #8c89ff; /* lightened info blue, dark bg */
+}
+
 :root {
   color-scheme: light dark;
   font-family:
@@ -14,4 +63,40 @@
 body {
   margin: 0;
   min-height: 100vh;
+  background-color: var(--color-cloud);
+  color: var(--color-ink);
+}
+
+a {
+  color: var(--color-link);
+  text-decoration: underline;
+}
+
+a:active {
+  color: var(--color-link-active);
+}
+
+a:visited {
+  color: var(--color-link-visited);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: var(--color-surface-dark);
+    color: var(--color-ink-dark);
+  }
+
+  a {
+    color: var(--color-link-dark);
+  }
+
+  a:active,
+  a:visited {
+    color: var(--color-link-dark);
+  }
 }
