@@ -127,6 +127,15 @@ datasets (stay in each source project's repo).
   (`POST /submit`, `GET /submit/{id}`, `POST /submit/{id}/answer`,
   `POST /submit/{id}/switch`). Holds the `OrchestratorApp` in a
   module-level dict populated once per process via a `lifespan` handler.
+  Deployed (Cloud Run, `orchestrator-api`, project
+  `supervisor-orchestrator`, `australia-southeast1`) —
+  `https://orchestrator-api-r5t2pyegva-ts.a.run.app`. `Dockerfile.api` +
+  `cloudbuild.api.yaml` at repo root (needs `python:3.12-slim` or newer —
+  a plain `typing.TypedDict` used as a Pydantic v2 field type
+  (`state.py`'s `Location`) crashes on startup under 3.11, a gotcha that
+  only showed up once actually deployed, not locally). See "The
+  checkpointer" below for what deploying this actually means for
+  durability (nothing new implemented there yet, deliberately).
 - **`checkpoint_cleanup.py`** — the retention sweep, see below.
 - **`router_service/main.py`** — separately deployed (Cloud Run, project
   `supervisor-orchestrator`), not part of this repo's own graph process.
@@ -134,10 +143,17 @@ datasets (stay in each source project's repo).
 - **`frontend/`** — plain Vite + Svelte 5 (runes) + TypeScript + Tailwind
   v4 SPA, `FRONTEND_PLAN.md`'s UX flow. Mirrors `sayyah/apps/client`'s
   tooling (not SvelteKit — a single-flow app doesn't need routing), not
-  `wellington-impact-lab`'s. Deploy target: Vercel (decided 2026-08-16 —
-  native env-var handling for the backend base URLs, matches `sayyah`'s
-  own hosting). Not deployed yet; targets a local `api.py` for now
-  (`VITE_API_BASE_URL`, default `http://localhost:8000`).
+  `wellington-impact-lab`'s. Deployed to Vercel production (decided
+  2026-08-16 — native env-var handling for the backend base URLs, matches
+  `sayyah`'s own hosting) —
+  `https://frontend-vert-rho-86.vercel.app`, `VITE_API_BASE_URL` set on
+  Vercel's Production environment (not a local `.env` file) pointing at
+  the live `orchestrator-api` URL above. `frontend/vercel.json` pins
+  `buildCommand`/`outputDirectory`/`framework: null` explicitly — Vercel's
+  auto-detection guessed SvelteKit purely from `svelte` being a dependency
+  (expects a `build/` output dir; this is a plain Vite app that outputs
+  `dist/`), which failed the first deploy attempt even though the build
+  itself succeeded.
   - `src/lib/api.ts` — typed client for all 4 endpoints, plus
     `checkBackendHealth()` (probes `GET /submit/__health_probe__`; a 404
     counts as "reachable", only a network-level failure means offline —
@@ -186,23 +202,27 @@ file). It's also what `POST /submit/{id}/switch` relies on —
 `graph.update_state(config, {...}, as_node="router")` just writes a new
 synthetic checkpoint and points execution at it.
 
-**`api.py` is not deployed anywhere yet** — this durability has only been
-verified with `orchestrate.py`/`api.py` running as local processes on one
-machine, both against the same local file (see the `orchestrate.py` bullet
-above). Once `api.py` deploys to Cloud Run, the checkpoint file sits on
-that container instance's local, ephemeral disk — `min-instances=0` (the
-pattern every other service here uses) would mean a paused session can be
-lost if the instance scales down before the submitter answers, the exact
-failure mode this checkpointer was originally built to survive, just one
-layer up (single-process durability is solved; multi-instance/Cloud-Run
-durability isn't yet). **Deliberately deferred, not solved** (2026-08-16)
-— options considered: pin the service to exactly 1 instance so the local
-disk never gets recycled, mount a GCS bucket for the SQLite file (still
-wants max-instances=1, since concurrent instances can't safely share one
-SQLite file), or move to a real multi-instance-safe checkpointer
+**`api.py` is now deployed** (Cloud Run, `orchestrator-api`, project
+`supervisor-orchestrator`, `australia-southeast1` —
+`https://orchestrator-api-r5t2pyegva-ts.a.run.app`), but its durability
+story hasn't caught up with that yet. Everything verified above (durable
+pause/resume across separate processes) was tested with `orchestrate.py`/
+`api.py` running as local processes on one machine, both against the same
+local file (see the `orchestrate.py` bullet above) — that part is solid.
+Deployed to Cloud Run, though, the checkpoint file sits on that container
+instance's local, ephemeral disk — `min-instances=0` (the pattern every
+other service here uses, `orchestrator-api` included) means a paused
+session **can** be lost if the instance scales down before the submitter
+answers. That's the exact failure mode this checkpointer was originally
+built to survive, just one layer up: single-process durability is solved,
+multi-instance/Cloud-Run durability isn't. **Deliberately deferred, not
+solved** (2026-08-16, reconfirmed after actually deploying) — options
+considered: pin the service to exactly 1 instance so the local disk never
+gets recycled, mount a GCS bucket for the SQLite file (still wants
+max-instances=1, since concurrent instances can't safely share one SQLite
+file), or move to a real multi-instance-safe checkpointer
 (`langgraph-checkpoint-postgres` against Cloud SQL). None implemented —
-staying on local SQLite with this known gap until `api.py` actually gets
-deployed.
+staying on local SQLite with this known gap live, not just theoretical.
 
 **Growth is unbounded by default** — nothing deletes anything, and growth
 scales with `sessions × nodes-executed-per-session`. `checkpoint_cleanup.py`

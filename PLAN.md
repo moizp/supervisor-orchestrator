@@ -660,20 +660,92 @@ than duplicated across both docs.
       the SQLite file, move to `langgraph-checkpoint-postgres`/Cloud SQL)
       — none implemented. Keeping it simple for now; revisit when `api.py`
       actually gets deployed, not before.
-- [ ] Svelte scaffold — in progress (dispatched to the Front-end Developer
-      agent, 2026-08-16). Plain Vite + Svelte 5 + TypeScript + Tailwind v4
-      (mirrors `sayyah`'s tooling, not SvelteKit — this is a single-flow
-      app, same shape as `sayyah` itself). Deploy target: **Vercel**
+- [x] **Svelte scaffold — done (2026-08-16, Front-end Developer agent).**
+      Plain Vite + Svelte 5 + TypeScript + Tailwind v4 (mirrors `sayyah`'s
+      tooling, not SvelteKit — this is a single-flow app, same shape as
+      `sayyah` itself). Full component breakdown recorded in `README.md`'s
+      Components section, not duplicated here. Deploy target: **Vercel**
       (decided 2026-08-16 — native env-var handling for the backend base
       URLs was the deciding factor over GitHub Pages; `sayyah` already
       uses Vercel, `wellington-impact-lab` is only *prepared* for either
-      target, no actual deploy workflow wired up there yet). See
-      `FRONTEND_PLAN.md`'s checklist: intake form → domain reveal →
-      clarify loop → result panel + switch suggestion, session_id
-      reflected in the URL. Brief given to the agent also required
-      staged status messaging instead of a bare spinner (backend calls
-      here run up to ~90s) and a backend-health indicator — see the new
-      "Communicating System State" section added to the Front-end
-      Developer agent's own guidelines
+      target, no actual deploy workflow wired up there yet). Brief given
+      to the agent required staged status messaging instead of a bare
+      spinner (backend calls here run up to ~90s) and a backend-health
+      indicator — see the new "Communicating System State" section added
+      to the Front-end Developer agent's own guidelines
       (`~/.claude/agents/front-end-developer.md`) for the general
-      principle, applied here.
+      principle, applied here. **Tested against the real local `api.py`**
+      by the agent (both domains end-to-end, `/switch`, refresh-safety) —
+      not mocked.
+- [x] **`orchestrator-api` deployed to Cloud Run (2026-08-16).** Same
+      project/region as `router-service` (`supervisor-orchestrator`,
+      `australia-southeast1`) — avoids repeating the `wellington-poller`
+      cross-project entanglement finding above. `Dockerfile.api` +
+      `cloudbuild.api.yaml` added at repo root (root `cloudbuild.yaml` was
+      already router-service's). Lighter profile than `router-service`:
+      no model loaded, 512Mi/1CPU vs 8Gi/4CPU, `min-instances=0`, no
+      `HF_TOKEN` build-arg needed. `MODEL_SERVER_URL` set explicitly via
+      `--set-env-vars` (no safe default — `test_router_model.py`'s
+      default is local `mlx_lm`); `HAZARD_API_BASE`/`OIA_API_BASE` left on
+      their correct built-in defaults.
+      - **Gotcha 1**: multi-source `COPY` in a Dockerfile needs the
+        destination to end with `/` (`COPY a.py b.py .` fails with "the
+        destination must be a directory and end with a /").
+      - **Gotcha 2 (new, added to the platform-and-deployment-engineer
+        skill):** built fine on `python:3.11-slim`, crashed on Cloud Run
+        startup — `PydanticUserError: Please use typing_extensions.TypedDict
+        instead of typing.TypedDict on Python < 3.12`. `api.py` uses
+        `state.py`'s `Location` (a plain `typing.TypedDict`) as a Pydantic
+        v2 field type, which needs Python 3.12+. Passed every local test
+        because the dev `.venv` runs a newer Python. Cloud Run's own error
+        was the unhelpful generic "container failed to start and listen
+        on the port" — the real error only showed up in
+        `gcloud logging read` against the specific revision name, not in
+        the Cloud Build output. Fixed: bumped `Dockerfile.api` to
+        `python:3.12-slim`.
+      - **Gotcha 3 (same one, again):** `--allow-unauthenticated` did not
+        create the `allUsers` invoker binding — 3rd time this exact thing
+        has happened across `router-service` (twice) and now this
+        service. Added manually, same as before. Worth treating as an
+        assume-you'll-need-it step on every first deploy of a new Cloud
+        Run service in this project, not a surprise each time.
+      - **`.gcloudignore` gap caught before it mattered**: didn't
+        previously exclude `frontend/node_modules/`, `frontend/dist/`, or
+        `*.sqlite*` — none of those were relevant to router-service's own
+        build (no `frontend/` existed yet when it was written), but would
+        have bloated this build's upload. Fixed proactively, confirmed
+        the upload stayed small (229 KB) after.
+      - **Verified end-to-end against the live URL**
+        (`https://orchestrator-api-r5t2pyegva-ts.a.run.app`): `/submit` →
+        `/answer` → `complete` with a real agency result; `OPTIONS
+        /submit` confirms CORS is open. This is the URL `frontend/`'s
+        `VITE_API_BASE_URL` should point to once it's deployed to Vercel.
+- [x] **`frontend/` deployed to Vercel production (2026-08-16)** —
+      `https://frontend-vert-rho-86.vercel.app`. Linked via `vercel link
+      --yes` (project `moizs-projects-de90e9a8/frontend`);
+      `VITE_API_BASE_URL` set on the Production environment via `vercel
+      env add` (not a local `.env` file — persists for future deploys
+      without needing to remember to pass it again), value = the live
+      `orchestrator-api` URL above.
+      - **Gotcha:** first deploy failed — `vercel --prod` built
+        successfully (Vite output `dist/` correctly, files listed in the
+        build log) but then errored `No Output Directory named "build"
+        found`. Vercel's framework auto-detection guessed **SvelteKit**
+        purely from the presence of `svelte` in `package.json`'s
+        dependencies, and SvelteKit's default output dir is `build/`, not
+        Vite's own default `dist/` — the auto-detect doesn't check for an
+        actual SvelteKit config/routing structure before assuming the
+        preset. Fixed by adding `frontend/vercel.json`:
+        `{"buildCommand": "vite build", "outputDirectory": "dist",
+        "framework": null}` — `framework: null` stops the wrong guess
+        entirely rather than just overriding its output-dir assumption.
+      - **Verified, not just "READY" status trusted**: fetched the
+        deployed `index.html`, followed its script tag, and grepped the
+        built JS bundle directly for the API base URL string — confirmed
+        `orchestrator-api-r5t2pyegva-ts.a.run.app` is baked in and no
+        `localhost:8000` fallback string is present (would indicate the
+        env var didn't take effect at build time). Also re-confirmed
+        CORS from the real deployed origin specifically (not just `curl`
+        from this machine): `OPTIONS /submit` with
+        `Origin: https://frontend-vert-rho-86.vercel.app` returns
+        `access-control-allow-origin: *`.
