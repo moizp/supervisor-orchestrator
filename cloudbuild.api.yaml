@@ -1,0 +1,47 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.api'
+      - '-t'
+      - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/orchestrator-api:${_TAG}'
+      - '.'
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/orchestrator-api:${_TAG}'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'orchestrator-api'
+      - '--image'
+      - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/orchestrator-api:${_TAG}'
+      - '--region'
+      - '${_AR_REGION}'
+      - '--allow-unauthenticated'
+      # No model loaded here (unlike router-service) — just HTTP calls
+      # to the 3 backing services plus a small local SQLite file.
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '2'
+      - '--timeout'
+      - '300'
+      - '--set-env-vars'
+      # No safe default for this one (test_router_model.py's default is
+      # local mlx_lm) — every other base URL already has a correct
+      # built-in default matching the live services, no override needed.
+      - 'MODEL_SERVER_URL=https://router-service-716627644300.australia-southeast1.run.app/v1/chat/completions'
+
+images:
+  - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/orchestrator-api:${_TAG}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
