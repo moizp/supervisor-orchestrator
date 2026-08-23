@@ -181,6 +181,21 @@ datasets (stay in each source project's repo).
     button), `StatusMessage`, `BackendHealthBadge`.
   - Tested against the real local `api.py` (not mocked): both domain
     flows end-to-end, `/switch`, and `GET`'s refresh-safety idempotency.
+  - **Visual design (2026-08-24):** follows the [New Zealand Government
+    Design System (alpha)](https://design-system-alpha.digital.govt.nz/basics/colours/)'s
+    colour palette — Slate `#2A2A2A` (text), Primary `#23CBA5`/`#24A882`/
+    `#078766` (brand teal, three WCAG-tiered variants), Link `#005DBB`
+    (underlined by default), and the alert palette (Error `#B10E1E`,
+    Warning `#D47500`, Success `#088A20`, Info `#1F1BFB`) driving
+    `StatusMessage`/`BackendHealthBadge`/error states — all pre-verified
+    WCAG 2.1 AA by the design system itself, used as published rather than
+    re-shaded. Tokens defined once in `src/app.css`'s Tailwind v4 `@theme`
+    block. Dark-mode variants (`-dark` suffixed tokens) are this project's
+    own adaptation, not part of NZGDS (which is light-first and doesn't
+    define a dark theme yet). **This app is not an official NZ Government
+    or Wellington City Council product** — adopting the openly-published
+    design language is deliberate, adding any government logo/wordmark
+    implying official authorship was deliberately avoided.
 
 ### The checkpointer
 

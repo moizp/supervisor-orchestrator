@@ -749,3 +749,27 @@ than duplicated across both docs.
         from this machine): `OPTIONS /submit` with
         `Origin: https://frontend-vert-rho-86.vercel.app` returns
         `access-control-allow-origin: *`.
+- [x] **Restyled to the NZ Government Design System (alpha) palette
+      (2026-08-24, Front-end Developer agent).** Styling-only pass — no
+      component logic/props/`SubmissionFlow.svelte.ts` changes. Exact
+      colour values sourced live from `design-system-alpha.digital.govt.nz`
+      (not recalled from training data, which would risk stale/wrong
+      hexes) — full palette + rationale recorded in `README.md`'s
+      Components section rather than duplicated here. Every generic
+      Tailwind slate/indigo/emerald/amber/red class replaced with the new
+      `@theme` tokens in `src/app.css`; confirmed via `grep` that zero
+      remain anywhere in `src/`. Dark mode isn't part of NZGDS (alpha
+      doesn't define one) — lightened/desaturated `-dark` variants of each
+      brand hue are this project's own judgement call, documented inline
+      in `app.css`'s own comments, not presented as official guidance.
+      **Deliberately did not** add the NZ Government logo/coat of
+      arms/wordmark or anything implying official government
+      authorship — this adopts the openly-published visual language, it
+      isn't and shouldn't read as an official government product. Header
+      still reads "llm-supervisor" — flagged (not changed) as reading more
+      technical than public-facing; a friendlier public name is a separate
+      open decision, not resolved here.
+      `pnpm run check`/`pnpm run lint`/`pnpm run build` all pass clean;
+      `svelte-autofixer` clean on every touched file. **Not yet
+      re-deployed to Vercel** — the live production URL above still serves
+      the pre-restyle build.
