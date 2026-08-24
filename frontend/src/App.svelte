@@ -21,7 +21,7 @@
       <div>
         <h1 class="text-xl font-bold text-ink dark:text-ink-dark">Smart Supervisor</h1>
         <p class="text-sm text-steel dark:text-steel-dark">
-          Hazard reports and OIA requests, sorted automatically.
+          Hazard reports and OIA requests, identified and routed automatically.
         </p>
       </div>
       <div class="flex items-center gap-2">
