@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Domain, HazardResult, OiaResult, SubmissionResult } from '../lib/api';
+  import { DOMAIN_LABELS } from '../lib/domainLabels';
 
   interface Props {
     domain: Domain | null;
@@ -30,6 +31,8 @@
   const otherDomainLabel = $derived(
     misrouteSuggestion === 'hazard' ? 'hazard report' : 'OIA request'
   );
+
+  const assignedPipelineLabel = $derived(domain ? DOMAIN_LABELS[domain] : null);
 </script>
 
 <div class="flex flex-col gap-5">
@@ -83,6 +86,10 @@
         Submit as {otherDomainLabel}
       </button>
     </div>
+  {:else if assignedPipelineLabel}
+    <p class="text-xs text-steel dark:text-steel-dark">
+      Cross-checked — both routing checks agree on {assignedPipelineLabel}.
+    </p>
   {/if}
 
   <button

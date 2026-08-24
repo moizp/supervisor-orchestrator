@@ -1,9 +1,9 @@
 <script lang="ts">
   import { SubmissionFlow } from './lib/SubmissionFlow.svelte';
   import BackendHealthBadge from './components/BackendHealthBadge.svelte';
+  import PipelineBadge from './components/PipelineBadge.svelte';
   import StatusMessage from './components/StatusMessage.svelte';
   import IntakeForm from './components/IntakeForm.svelte';
-  import DomainReveal from './components/DomainReveal.svelte';
   import ClarificationStep from './components/ClarificationStep.svelte';
   import ResultPanel from './components/ResultPanel.svelte';
 
@@ -24,7 +24,12 @@
           Hazard reports and OIA requests, sorted automatically.
         </p>
       </div>
-      <BackendHealthBadge status={flow.backendStatus} />
+      <div class="flex items-center gap-2">
+        {#if flow.domain}
+          <PipelineBadge domain={flow.domain} />
+        {/if}
+        <BackendHealthBadge status={flow.backendStatus} />
+      </div>
     </header>
 
     <main
@@ -43,32 +48,23 @@
       {:else if flow.step === 'submitting'}
         <StatusMessage message={flow.statusMessage} />
       {:else if flow.step === 'clarifying'}
-        <div class="flex flex-col gap-5">
-          <DomainReveal domain={flow.domain} />
-          <ClarificationStep
-            question={flow.question ?? ''}
-            bind:answerText={flow.answerText}
-            canAnswer={flow.canAnswer}
-            errorMessage={flow.errorMessage}
-            onsubmit={() => flow.submitAnswer()}
-          />
-        </div>
+        <ClarificationStep
+          question={flow.question ?? ''}
+          bind:answerText={flow.answerText}
+          canAnswer={flow.canAnswer}
+          errorMessage={flow.errorMessage}
+          onsubmit={() => flow.submitAnswer()}
+        />
       {:else if flow.step === 'answering' || flow.step === 'switching'}
-        <div class="flex flex-col gap-5">
-          <DomainReveal domain={flow.domain} />
-          <StatusMessage message={flow.statusMessage} />
-        </div>
+        <StatusMessage message={flow.statusMessage} />
       {:else if flow.step === 'complete'}
-        <div class="flex flex-col gap-5">
-          <DomainReveal domain={flow.domain} />
-          <ResultPanel
-            domain={flow.domain}
-            result={flow.result}
-            misrouteSuggestion={flow.misrouteSuggestion}
-            onswitch={() => flow.doSwitch()}
-            onstartover={() => flow.startOver()}
-          />
-        </div>
+        <ResultPanel
+          domain={flow.domain}
+          result={flow.result}
+          misrouteSuggestion={flow.misrouteSuggestion}
+          onswitch={() => flow.doSwitch()}
+          onstartover={() => flow.startOver()}
+        />
       {/if}
     </main>
   </div>
