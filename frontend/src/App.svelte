@@ -19,7 +19,7 @@
   <div class="mx-auto flex max-w-xl flex-col gap-6">
     <header class="flex items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl font-bold text-ink dark:text-ink-dark">llm-supervisor</h1>
+        <h1 class="text-xl font-bold text-ink dark:text-ink-dark">Smart Supervisor</h1>
         <p class="text-sm text-steel dark:text-steel-dark">
           Hazard reports and OIA requests, sorted automatically.
         </p>
