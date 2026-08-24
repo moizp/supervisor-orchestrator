@@ -56,5 +56,5 @@
       />
     </svg>
   {/if}
-  <span class="hidden sm:inline">{label}</span>
+  <span>{label}</span>
 </div>

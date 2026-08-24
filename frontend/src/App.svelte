@@ -24,12 +24,6 @@
           Hazard reports and OIA requests, identified and routed automatically.
         </p>
       </div>
-      <div class="flex items-center gap-2">
-        {#if flow.domain}
-          <PipelineBadge domain={flow.domain} />
-        {/if}
-        <BackendHealthBadge status={flow.backendStatus} />
-      </div>
     </header>
 
     <main
@@ -67,5 +61,12 @@
         />
       {/if}
     </main>
+
+    <div class="flex items-center gap-3">
+      {#if flow.domain}
+        <PipelineBadge domain={flow.domain} />
+      {/if}
+      <BackendHealthBadge status={flow.backendStatus} />
+    </div>
   </div>
 </div>

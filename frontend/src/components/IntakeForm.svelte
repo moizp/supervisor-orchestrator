@@ -24,11 +24,11 @@
 <form class="flex flex-col gap-5" onsubmit={handleSubmit}>
   <div class="flex flex-col gap-1.5">
     <label for="raw-text" class="text-sm font-medium text-ink dark:text-ink-dark">
-      What's going on?
+      Report hazard or submit OIA request
     </label>
     <p id="raw-text-hint" class="text-xs text-steel dark:text-steel-dark">
-      Describe a hazard you've noticed, or an Official Information Act request — no need to say
-      which. We'll work that out.
+      Describe a hazard you've noticed, or an Official Information Act request. (No need to say
+      which — We'll work that out.)
     </p>
     <textarea
       id="raw-text"

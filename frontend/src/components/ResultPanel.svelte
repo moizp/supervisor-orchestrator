@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Domain, HazardResult, OiaResult, SubmissionResult } from '../lib/api';
-  import { DOMAIN_LABELS } from '../lib/domainLabels';
+  import { HAZARD_ACTION_LABELS } from '../lib/hazardActionLabels';
 
   interface Props {
     domain: Domain | null;
@@ -32,7 +32,10 @@
     misrouteSuggestion === 'hazard' ? 'hazard report' : 'OIA request'
   );
 
-  const assignedPipelineLabel = $derived(domain ? DOMAIN_LABELS[domain] : null);
+  const hazardActions = $derived(hazardResult?.actions.filter((action) => action !== 'none') ?? []);
+  const hazardNoActionNeeded = $derived(
+    hazardResult !== null && hazardResult.actions.length > 0 && hazardActions.length === 0
+  );
 </script>
 
 <div class="flex flex-col gap-5">
@@ -51,15 +54,17 @@
         {/if}
       </div>
       <p class="text-sm text-ink dark:text-ink-dark">{hazardResult.rationale}</p>
-      {#if hazardResult.actions.length > 0}
+      {#if hazardActions.length > 0}
         <div>
           <h3 class="mb-1 text-sm font-medium text-ink dark:text-ink-dark">Next steps</h3>
           <ul class="list-inside list-disc space-y-1 text-sm text-ink dark:text-steel-dark">
-            {#each hazardResult.actions as action (action)}
-              <li>{action}</li>
+            {#each hazardActions as action (action)}
+              <li>{HAZARD_ACTION_LABELS[action] ?? action}</li>
             {/each}
           </ul>
         </div>
+      {:else if hazardNoActionNeeded}
+        <p class="text-sm text-ink dark:text-steel-dark">No further action needed</p>
       {/if}
     </div>
   {:else if oiaResult}
@@ -86,10 +91,6 @@
         Submit as {otherDomainLabel}
       </button>
     </div>
-  {:else if assignedPipelineLabel}
-    <p class="text-xs text-steel dark:text-steel-dark">
-      Cross-checked — both routing checks agree on {assignedPipelineLabel}.
-    </p>
   {/if}
 
   <button

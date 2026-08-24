@@ -30,5 +30,5 @@
   role="status"
 >
   <span class={['h-2 w-2 rounded-full', dotClass]} aria-hidden="true"></span>
-  <span class="hidden sm:inline">{label}</span>
+  <span>{label}</span>
 </div>
