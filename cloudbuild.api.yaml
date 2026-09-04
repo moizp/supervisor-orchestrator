@@ -39,6 +39,11 @@ steps:
       # local mlx_lm) — every other base URL already has a correct
       # built-in default matching the live services, no override needed.
       - 'MODEL_SERVER_URL=https://router-service-716627644300.australia-southeast1.run.app/v1/chat/completions'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - '-c'
+      - 'gcloud run revisions list --service=orchestrator-api --region=${_AR_REGION} --format="value(name)" | tail -n +2 | xargs -r -n1 gcloud run revisions delete --region=${_AR_REGION} --quiet'
 
 images:
   - '${_AR_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/orchestrator-api:${_TAG}'
